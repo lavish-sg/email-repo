@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 
 from app.config import settings
-from app.api.v1 import security, generate, intelligence, guides
+from app.api.v1 import security, generate, intelligence, guides, header_analysis
 from app.models.responses import ErrorResponse
 
 
@@ -158,6 +158,7 @@ app.include_router(security.router)
 app.include_router(generate.router)
 app.include_router(intelligence.router)
 app.include_router(guides.router)
+app.include_router(header_analysis.router)
 
 
 if __name__ == "__main__":

@@ -148,8 +148,7 @@ class SPFGenerator:
     def generate_spf_record(
         providers: list = None,
         include_all: bool = False,
-        custom_mechanisms: list = None,
-        all_mechanism: str = "~all"
+        custom_mechanisms: list = None
     ) -> str:
         """
         Generate SPF record.
@@ -158,7 +157,6 @@ class SPFGenerator:
             providers: List of email providers to include
             include_all: Include all common providers
             custom_mechanisms: Custom SPF mechanisms
-            all_mechanism: The 'all' mechanism to use
             
         Returns:
             Generated SPF record
@@ -177,9 +175,6 @@ class SPFGenerator:
         # Add custom mechanisms
         if custom_mechanisms:
             mechanisms.extend(custom_mechanisms)
-        
-        # Add all mechanism
-        mechanisms.append(all_mechanism)
         
         return ' '.join(mechanisms)
     
@@ -235,10 +230,12 @@ class DMARCGenerator:
         
         # Add report URIs
         if report_uri:
-            parts.append(f'rua=mailto:{report_uri}')
+            rua_value = report_uri if report_uri.startswith('mailto:') else f'mailto:{report_uri}'
+            parts.append(f'rua={rua_value}')
         
         if forensic_uri:
-            parts.append(f'ruf=mailto:{forensic_uri}')
+            ruf_value = forensic_uri if forensic_uri.startswith('mailto:') else f'mailto:{forensic_uri}'
+            parts.append(f'ruf={ruf_value}')
         
         return '; '.join(parts)
     
@@ -278,7 +275,9 @@ class MTASTSGenerator:
         Returns:
             MTA-STS DNS TXT record
         """
-        return f'v=STSv1; id=1'
+        # Use a dynamic policy id so updates propagate quickly across caches
+        id_value = str(int(datetime.now(timezone.utc).timestamp()))
+        return f'v=STSv1; id={id_value}'
     
     @staticmethod
     def generate_mtasts_policy(
@@ -302,16 +301,30 @@ class MTASTSGenerator:
         if mx_records is None:
             mx_records = []
         
+        # Normalize and clamp inputs
+        valid_modes = ['testing', 'enforce', 'none']
+        normalized_mode = mode if mode in valid_modes else 'testing'
+        clamped_max_age = max(300, min(int(max_age), 31536000))
+
         policy_lines = [
             'version: STSv1',
-            f'mode: {mode}',
-            f'max_age: {max_age}'
+            f'mode: {normalized_mode}',
+            f'max_age: {clamped_max_age}'
         ]
         
         if mx_records:
-            policy_lines.append('mx:')
+            # Deduplicate and normalize MX entries
+            seen = set()
+            normalized_mx = []
             for mx in mx_records:
-                policy_lines.append(f'  - {mx}')
+                entry = str(mx).strip()
+                if entry and entry not in seen:
+                    seen.add(entry)
+                    normalized_mx.append(entry)
+            if normalized_mx:
+                policy_lines.append('mx:')
+                for mx in normalized_mx:
+                    policy_lines.append(f'  - {mx}')
         
         if include_subdomains:
             policy_lines.append('subdomains: true')
@@ -411,7 +424,25 @@ class TLSRPTGenerator:
         Returns:
             TLS-RPT DNS TXT record
         """
-        record = f'v=TLSRPTv1; rua={report_uri}'
+        # Support multiple URIs via comma-separated list and normalize prefixes
+        uri_candidates = [u.strip() for u in report_uri.split(',')] if report_uri else []
+        normalized_uris = []
+        seen = set()
+        for uri in uri_candidates:
+            if not uri:
+                continue
+            if uri.startswith('mailto:') or uri.startswith('https:'):
+                normalized = uri
+            else:
+                # If it looks like an email, prefix with mailto:
+                normalized = f'mailto:{uri}'
+            if normalized not in seen:
+                seen.add(normalized)
+                normalized_uris.append(normalized)
+        # Fallback to default if none provided after normalization
+        if not normalized_uris:
+            normalized_uris = [report_uri if report_uri else 'mailto:tls-reports@example.com']
+        record = f"v=TLSRPTv1; rua={','.join(normalized_uris)}"
         
         if include_subdomains:
             record += '; subdomains=true'

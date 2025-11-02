@@ -14,6 +14,14 @@ class DNSResolver:
         self.resolver = dns.resolver.Resolver()
         self.resolver.timeout = settings.dns_timeout
         self.resolver.lifetime = settings.dns_timeout
+        # Optional custom nameservers from config
+        if getattr(settings, 'dns_nameservers', None):
+            try:
+                ns = [n.strip() for n in settings.dns_nameservers.split(',') if n.strip()]
+                if ns:
+                    self.resolver.nameservers = ns
+            except Exception:
+                pass
         
     def resolve_txt(self, domain: str) -> List[str]:
         """Resolve TXT records for a domain."""
@@ -27,6 +35,30 @@ class DNSResolver:
             return None
         except dns.exception.DNSException:
             return []
+
+    def resolve_txt_with_fallback(self, domain: str) -> List[str]:
+        """Resolve TXT with fallback retries and public resolvers to reduce timeouts."""
+        # Primary attempt
+        result = self.resolve_txt(domain)
+        if result is not None:
+            return result
+        # Timeout: try fallbacks
+        fallback_nameservers = [['1.1.1.1', '1.0.0.1'], ['8.8.8.8', '8.8.4.4']]
+        for names in fallback_nameservers:
+            try:
+                r = dns.resolver.Resolver()
+                r.timeout = settings.dns_timeout
+                r.lifetime = settings.dns_timeout
+                r.nameservers = names
+                answers = r.resolve(domain, 'TXT')
+                return [str(answer).strip('"') for answer in answers]
+            except dns.resolver.LifetimeTimeout:
+                continue
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                return []
+            except dns.exception.DNSException:
+                continue
+        return None
     
     def resolve_mx(self, domain: str) -> List[Dict[str, Any]]:
         """Resolve MX records for a domain."""

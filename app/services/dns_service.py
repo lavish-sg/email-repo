@@ -28,8 +28,11 @@ class DNSService:
             # Normalize domain
             domain = DomainValidator.normalize_domain(domain)
             
-            # Get TXT records
-            txt_records = self.resolver.resolve_txt(domain)
+            # Get TXT records (with fallback resolvers on timeout)
+            if hasattr(self.resolver, 'resolve_txt_with_fallback'):
+                txt_records = self.resolver.resolve_txt_with_fallback(domain)
+            else:
+                txt_records = self.resolver.resolve_txt(domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -159,8 +162,11 @@ class DNSService:
                 # Construct DKIM record name
                 dkim_domain = f'{selector}._domainkey.{domain}'
                 
-                # Get TXT records
-                txt_records = self.resolver.resolve_txt(dkim_domain)
+                # Get TXT records (with fallback resolvers on timeout)
+                if hasattr(self.resolver, 'resolve_txt_with_fallback'):
+                    txt_records = self.resolver.resolve_txt_with_fallback(dkim_domain)
+                else:
+                    txt_records = self.resolver.resolve_txt(dkim_domain)
                 
                 # Handle timeout case
                 if txt_records is None:
@@ -269,8 +275,11 @@ class DNSService:
             # Construct DMARC record name
             dmarc_domain = f'_dmarc.{domain}'
             
-            # Get TXT records
-            txt_records = self.resolver.resolve_txt(dmarc_domain)
+            # Get TXT records (with fallback resolvers on timeout)
+            if hasattr(self.resolver, 'resolve_txt_with_fallback'):
+                txt_records = self.resolver.resolve_txt_with_fallback(dmarc_domain)
+            else:
+                txt_records = self.resolver.resolve_txt(dmarc_domain)
             
             # Handle timeout case
             if txt_records is None:

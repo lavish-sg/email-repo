@@ -398,94 +398,256 @@ async def scan_domain_security(
             
             # If domain has no DNS records at all, it's likely problematic
             if not a_records and not txt_records_list and not mx_records:
-                risk_assessment = {
+                # Return a consistent SecurityScanResult shape so the frontend can safely render
+                spf_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "mechanisms": [],
+                    "includes": [],
+                    "all_mechanism": None,
+                    "record_count": 0,
+                    "warnings": ["No SPF record found"],
+                    "recommendations": ["Create an SPF record"]
+                }
+                dkim_results: list = []
+                dmarc_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "policy": None,
+                    "subdomain_policy": None,
+                    "percentage": None,
+                    "report_uri": [],
+                    "forensic_uri": [],
+                    "adkim": None,
+                    "aspf": None,
+                    "warnings": ["No DMARC record found"],
+                    "recommendations": ["Create a DMARC record"]
+                }
+                bimi_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "logo_url": None,
+                    "vmc_url": None,
+                    "logo_accessible": False,
+                    "vmc_valid": False,
+                    "warnings": ["No BIMI record found"],
+                    "recommendations": ["BIMI is optional but can improve branding"]
+                }
+                mtasts_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "version": None,
+                    "mode": None,
+                    "max_age": None,
+                    "mx_records": [],
+                    "policy_accessible": False,
+                    "policy_valid": False,
+                    "warnings": ["No MTA-STS record found"],
+                    "recommendations": []
+                }
+                tlsrpt_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "version": None,
+                    "rua": [],
+                    "warnings": ["No TLS-RPT record found"],
+                    "recommendations": []
+                }
+                tls_result = {
+                    "mx_records": [],
+                    "starttls_support": {},
+                    "tls_version": {},
+                    "certificate_valid": {},
+                    "status": "not_found",
+                    "warnings": ["TLS checking not yet implemented"],
+                    "recommendations": ["TLS checking will be available in a future update"]
+                }
+                mx_result = {
+                    "records": [],
+                    "status": "not_found",
+                    "primary_mx": None,
+                    "backup_mx_count": 0,
+                    "security_score": 0,
+                    "open_relay_risk": False,
+                    "warnings": [],
+                    "recommendations": []
+                }
+
+                protocol_status = _generate_protocol_status(
+                    spf_result, dkim_results, dmarc_result, mtasts_result, tlsrpt_result, bimi_result, mx_result
+                )
+
+                result = SecurityScanResult(
+                    domain=domain,
+                    scan_timestamp=datetime.now().isoformat(),
+                    overall_status="not_found",
+                    spf=SPFRecord(**spf_result),
+                    dkim=[DKIMRecord(**dkim) for dkim in dkim_results],
+                    dmarc=DMARCRecord(**dmarc_result),
+                    bimi=BIMIRecord(**bimi_result),
+                    mtasts=MTASTSRecord(**mtasts_result),
+                    tlsrpt=TLSRPTRecord(**tlsrpt_result),
+                    tls=TLSRecord(**tls_result),
+                    mx=MXRecord(**mx_result),
+                    score=0,
+                    overall_score=0,
+                    summary=["Domain has no DNS records"],
+                    recommendations=["This domain appears to be inactive or misconfigured"],
+                    scoring_breakdown=None,
+                    risk_assessment={
                     "level": "high_risk",
                     "severity": "Critical",
                     "description": "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements.",
                     "action_required": "Immediate action required",
                     "score": 0,
-                    "critical_vulnerabilities": ["SPF record missing", "DKIM records missing", "DMARC record missing"]
-                }
-                
-                protocol_status = {
-                    "spf": {"status": "Missing", "policy": "Not specified", "includes_count": 0, "record": "Not found"},
-                    "dkim": {"status": "Missing", "selectors_checked": 0, "working_selectors": 0, "key_strength": "Not applicable"},
-                    "dmarc": {"status": "Missing", "policy": "Not configured", "subdomain_policy": "Not configured", "reporting": "Not configured"},
-                    "mtasts": {"status": "Missing", "mode": "Not configured", "policy_accessible": False},
-                    "tlsrpt": {"status": "Missing", "reporting_uris": 0},
-                    "bimi": {"status": "Missing", "logo_accessible": False, "vmc_valid": False},
-                    "mx": {"status": "Missing", "record_count": 0, "security_score": 0, "open_relay_risk": False}
-                }
+                        "critical_vulnerabilities": [
+                            "SPF record missing",
+                            "DKIM records missing",
+                            "DMARC record missing"
+                        ]
+                    },
+                    industry_standard_assessment=None,
+                    protocol_status=protocol_status,
+                    summary_text=None,
+                    quick_summary=None
+                )
                 
                 return SuccessResponse(
                     success=True,
                     message="Domain not found or has no DNS records",
-                    data={
-                        "domain": domain,
-                        "scan_timestamp": datetime.now().isoformat(),
-                        "overall_status": "not_found",
-                        "score": 0,
-                        "overall_score": 0,
-                        "summary": ["Domain has no DNS records"],
-                        "recommendations": ["This domain appears to be inactive or misconfigured"],
-                        "warnings": ["No DNS records found for this domain"],
-                        "scoring_breakdown": {
-                            "core_authentication": {"total_points": 35, "earned_points": 0},
-                            "policy_enforcement": {"total_points": 25, "earned_points": 0},
-                            "advanced_security": {"total_points": 20, "earned_points": 0},
-                            "threat_intelligence": {"total_points": 15, "earned_points": 0},
-                            "branding_compliance": {"total_points": 5, "earned_points": 0},
-                            "penalties": {"total_penalties": 0}
-                        },
-                        "risk_assessment": risk_assessment,
-                        "protocol_status": protocol_status
-                    }
+                    data=result
                 )
             
             # If domain has IP but no TXT records (and TXT records are available), it's likely problematic
             if a_records and txt_records_available and not txt_records_list:
-                risk_assessment = {
+                # Return a consistent SecurityScanResult shape when no security TXT records are present
+                spf_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "mechanisms": [],
+                    "includes": [],
+                    "all_mechanism": None,
+                    "record_count": 0,
+                    "warnings": ["No SPF record found"],
+                    "recommendations": ["Create an SPF record"]
+                }
+                dkim_results: list = []
+                dmarc_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "policy": None,
+                    "subdomain_policy": None,
+                    "percentage": None,
+                    "report_uri": [],
+                    "forensic_uri": [],
+                    "adkim": None,
+                    "aspf": None,
+                    "warnings": ["No DMARC record found"],
+                    "recommendations": ["Create a DMARC record"]
+                }
+                bimi_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "logo_url": None,
+                    "vmc_url": None,
+                    "logo_accessible": False,
+                    "vmc_valid": False,
+                    "warnings": ["No BIMI record found"],
+                    "recommendations": ["BIMI is optional but can improve branding"]
+                }
+                mtasts_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "version": None,
+                    "mode": None,
+                    "max_age": None,
+                    "mx_records": [],
+                    "policy_accessible": False,
+                    "policy_valid": False,
+                    "warnings": ["No MTA-STS record found"],
+                    "recommendations": []
+                }
+                tlsrpt_result = {
+                    "exists": False,
+                    "record": None,
+                    "status": "not_found",
+                    "version": None,
+                    "rua": [],
+                    "warnings": ["No TLS-RPT record found"],
+                    "recommendations": []
+                }
+                tls_result = {
+                    "mx_records": [],
+                    "starttls_support": {},
+                    "tls_version": {},
+                    "certificate_valid": {},
+                    "status": "not_found",
+                    "warnings": ["TLS checking not yet implemented"],
+                    "recommendations": ["TLS checking will be available in a future update"]
+                }
+                mx_result = {
+                    "records": [],
+                    "status": "not_found",
+                    "primary_mx": None,
+                    "backup_mx_count": 0,
+                    "security_score": 0,
+                    "open_relay_risk": False,
+                    "warnings": [],
+                    "recommendations": []
+                }
+
+                protocol_status = _generate_protocol_status(
+                    spf_result, dkim_results, dmarc_result, mtasts_result, tlsrpt_result, bimi_result, mx_result
+                )
+
+                result = SecurityScanResult(
+                    domain=domain,
+                    scan_timestamp=datetime.now().isoformat(),
+                    overall_status="not_found",
+                    spf=SPFRecord(**spf_result),
+                    dkim=[DKIMRecord(**dkim) for dkim in dkim_results],
+                    dmarc=DMARCRecord(**dmarc_result),
+                    bimi=BIMIRecord(**bimi_result),
+                    mtasts=MTASTSRecord(**mtasts_result),
+                    tlsrpt=TLSRPTRecord(**tlsrpt_result),
+                    tls=TLSRecord(**tls_result),
+                    mx=MXRecord(**mx_result),
+                    score=0,
+                    overall_score=0,
+                    summary=["Domain exists but has no security records"],
+                    recommendations=["This domain appears to be inactive or misconfigured"],
+                    scoring_breakdown=None,
+                    risk_assessment={
                     "level": "high_risk",
                     "severity": "Critical",
                     "description": "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements.",
                     "action_required": "Immediate action required",
                     "score": 0,
-                    "critical_vulnerabilities": ["SPF record missing", "DKIM records missing", "DMARC record missing"]
-                }
-                
-                protocol_status = {
-                    "spf": {"status": "Missing", "policy": "Not specified", "includes_count": 0, "record": "Not found"},
-                    "dkim": {"status": "Missing", "selectors_checked": 0, "working_selectors": 0, "key_strength": "Not applicable"},
-                    "dmarc": {"status": "Missing", "policy": "Not configured", "subdomain_policy": "Not configured", "reporting": "Not configured"},
-                    "mtasts": {"status": "Missing", "mode": "Not configured", "policy_accessible": False},
-                    "tlsrpt": {"status": "Missing", "reporting_uris": 0},
-                    "bimi": {"status": "Missing", "logo_accessible": False, "vmc_valid": False},
-                    "mx": {"status": "Configured", "record_count": len(mx_records), "security_score": 0, "open_relay_risk": False}
-                }
+                        "critical_vulnerabilities": [
+                            "SPF record missing",
+                            "DKIM records missing",
+                            "DMARC record missing"
+                        ]
+                    },
+                    industry_standard_assessment=None,
+                    protocol_status=protocol_status,
+                    summary_text=None,
+                    quick_summary=None
+                )
                 
                 return SuccessResponse(
                     success=True,
                     message="Domain not found or has no security records",
-                    data={
-                        "domain": domain,
-                        "scan_timestamp": datetime.now().isoformat(),
-                        "overall_status": "not_found",
-                        "score": 0,
-                        "overall_score": 0,
-                        "summary": ["Domain exists but has no security records"],
-                        "recommendations": ["This domain appears to be inactive or misconfigured"],
-                        "warnings": ["No security records found for this domain"],
-                        "scoring_breakdown": {
-                            "core_authentication": {"total_points": 35, "earned_points": 0},
-                            "policy_enforcement": {"total_points": 25, "earned_points": 0},
-                            "advanced_security": {"total_points": 20, "earned_points": 0},
-                            "threat_intelligence": {"total_points": 15, "earned_points": 0},
-                            "branding_compliance": {"total_points": 5, "earned_points": 0},
-                            "penalties": {"total_penalties": 0}
-                        },
-                        "risk_assessment": risk_assessment,
-                        "protocol_status": protocol_status
-                    }
+                    data=result
                 )
         except Exception:
             pass  # Continue with normal scan if check fails
@@ -830,7 +992,7 @@ async def scan_domain_security(
                         "max_points": 3,
                         "earned_points": 3 if (spf_result and spf_result.get('status') == 'pass') else (2 if (spf_result and spf_result.get('status') == 'warning') else 1),
                         "status": _get_industry_standard_status("spf", spf_result),
-                        "technical_status": str(spf_result.get('status', 'unknown')) if spf_result else 'unknown'
+                        "technical_status": str(spf_result.get('status', 'not_found')) if spf_result else 'not_found'
                     },
                     "dkim": {
                         "max_points": 3,
@@ -842,7 +1004,7 @@ async def scan_domain_security(
                         "max_points": 4,
                         "earned_points": 4 if (dmarc_result and dmarc_result.get('status') == 'pass' and dmarc_result.get('subdomain_policy') != 'none') else (3 if (dmarc_result and dmarc_result.get('status') == 'pass') else (2 if (dmarc_result and dmarc_result.get('status') == 'warning') else 1)),
                         "status": _get_industry_standard_status("dmarc", dmarc_result),
-                        "technical_status": str(dmarc_result.get('status', 'unknown')) if dmarc_result else 'unknown',
+                        "technical_status": str(dmarc_result.get('status', 'not_found')) if dmarc_result else 'not_found',
                         "subdomain_policy": dmarc_result.get('subdomain_policy', 'none') if dmarc_result else 'none'
                     }
                 }
@@ -854,7 +1016,7 @@ async def scan_domain_security(
                     "spf": {
                         "max_points": 25,
                         "earned_points": 25 if (spf_result and spf_result.get('status') == 'pass') else (15 if (spf_result and spf_result.get('status') == 'warning') else 5),
-                        "status": str(spf_result.get('status', 'unknown')) if spf_result else 'unknown'
+                        "status": str(spf_result.get('status', 'not_found')) if spf_result else 'not_found'
                     },
                     "dkim": {
                         "max_points": 25,
@@ -864,7 +1026,7 @@ async def scan_domain_security(
                     "dmarc": {
                         "max_points": 20,
                         "earned_points": 20 if (dmarc_result and dmarc_result.get('status') == 'pass') else (10 if (dmarc_result and dmarc_result.get('status') == 'warning') else 5),
-                        "status": str(dmarc_result.get('status', 'unknown')) if dmarc_result else 'unknown'
+                        "status": str(dmarc_result.get('status', 'not_found')) if dmarc_result else 'not_found'
                     }
                 }
             },
@@ -891,17 +1053,17 @@ async def scan_domain_security(
                     "mtasts": {
                         "max_points": 4,
                         "earned_points": 4 if (mtasts_result and mtasts_result.get('status') == 'pass') else (2 if (mtasts_result and mtasts_result.get('status') == 'warning') else 0),
-                        "status": str(mtasts_result.get('status', 'unknown')) if mtasts_result else 'unknown'
+                        "status": str(mtasts_result.get('status', 'not_found')) if mtasts_result else 'not_found'
                     },
                     "tlsrpt": {
                         "max_points": 3,
                         "earned_points": 3 if (tlsrpt_result and tlsrpt_result.get('status') == 'pass') else (1 if (tlsrpt_result and tlsrpt_result.get('status') == 'warning') else 0),
-                        "status": str(tlsrpt_result.get('status', 'unknown')) if tlsrpt_result else 'unknown'
+                        "status": str(tlsrpt_result.get('status', 'not_found')) if tlsrpt_result else 'not_found'
                     },
                     "bimi": {
                         "max_points": 3,
                         "earned_points": 3 if (bimi_result and bimi_result.get('status') == 'pass') else (1 if (bimi_result and bimi_result.get('status') == 'warning') else 0),
-                        "status": str(bimi_result.get('status', 'unknown')) if bimi_result else 'unknown'
+                        "status": str(bimi_result.get('status', 'not_found')) if bimi_result else 'not_found'
                     }
                 }
             }

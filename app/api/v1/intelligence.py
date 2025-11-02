@@ -48,22 +48,34 @@ async def get_whois_info(
                 }
             )
         
-        # Parse WHOIS data with safe handling of None values
+        # Parse WHOIS data with safe handling of None values and mixed types
         def safe_list(value):
             if value is None:
                 return []
-            elif isinstance(value, list):
+            elif isinstance(value, (list, set, tuple)):
                 return [str(v) for v in value if v is not None]
             else:
                 return [str(value)] if value else []
         
         def safe_date(value):
+            # Only accept datetime instances; ignore strings/dates to avoid validation errors
             if value is None:
                 return None
-            elif isinstance(value, list):
-                return value[0] if value else None
+            if isinstance(value, list):
+                for v in value:
+                    if isinstance(v, datetime):
+                        return v
+                return None
+            return value if isinstance(value, datetime) else None
+        
+        # dnssec can be boolean, string, or missing depending on WHOIS source
+        dnssec_value = None
+        if hasattr(w, 'dnssec'):
+            val = getattr(w, 'dnssec')
+            if isinstance(val, (bool, str)):
+                dnssec_value = val
             else:
-                return value
+                dnssec_value = None
         
         whois_info = WHOISInfo(
             domain=domain,
@@ -73,7 +85,7 @@ async def get_whois_info(
             updated_date=safe_date(w.updated_date),
             status=safe_list(w.status),
             name_servers=safe_list(w.name_servers),
-            dnssec=w.dnssec if hasattr(w, 'dnssec') else None
+            dnssec=dnssec_value
         )
         
         return SuccessResponse(
@@ -109,7 +121,7 @@ async def get_geolocation_info(
         from app.services.dns_service import dns_service
         mx_result = await dns_service.get_mx_records(domain)
         
-        if not mx_result['records']:
+        if not mx_result or not mx_result.get('records'):
             return SuccessResponse(
                 message="No MX records found for domain",
                 data={
@@ -124,8 +136,10 @@ async def get_geolocation_info(
         from app.utils.dns_utils import dns_resolver
         geolocation_data = []
         
-        for mx_record in mx_result['records']:
-            mx_server = mx_record['exchange']
+        for mx_record in mx_result.get('records', []):
+            mx_server = mx_record.get('exchange')
+            if not mx_server:
+                continue
             
             try:
                 # Resolve IP address
@@ -409,13 +423,23 @@ async def get_dns_records(
         # Get DNS records
         from app.utils.dns_utils import dns_resolver
         
+        a_records = dns_resolver.resolve_a(domain)
+        aaaa_records = dns_resolver.resolve_aaaa(domain)
+        mx_records = dns_resolver.resolve_mx(domain)
+        ns_records = dns_resolver.resolve_ns(domain)
+        txt_records = dns_resolver.resolve_txt(domain)
+        txt_timeout = txt_records is None
+        if txt_records is None:
+            txt_records = []
+
         dns_data = {
             "domain": domain,
-            "a_records": dns_resolver.resolve_a(domain),
-            "aaaa_records": dns_resolver.resolve_aaaa(domain),
-            "mx_records": dns_resolver.resolve_mx(domain),
-            "ns_records": dns_resolver.resolve_ns(domain),
-            "txt_records": dns_resolver.resolve_txt(domain),
+            "a_records": a_records,
+            "aaaa_records": aaaa_records,
+            "mx_records": mx_records,
+            "ns_records": ns_records,
+            "txt_records": txt_records,
+            "txt_timeout": txt_timeout,
             "timestamp": datetime.utcnow().isoformat()
         }
         

@@ -25,9 +25,23 @@ class Settings(BaseSettings):
     # DNS Configuration
     dns_timeout: int = 20
     dns_retries: int = 3
+    dns_nameservers: Optional[str] = None  # Comma-separated, e.g., "1.1.1.1,8.8.8.8"
     
     # Performance Configuration
     default_dkim_selectors: str = "default,google,selector1,selector2,k1,mandrill,s1,s2"  # Restored all 8 selectors for comprehensive checking
+    
+    # IMAP Configuration (for inbound testing mailbox)
+    imap_host: Optional[str] = None
+    imap_port: int = 993
+    imap_username: Optional[str] = None
+    imap_password: Optional[str] = None
+    imap_mailbox: str = "INBOX"
+    imap_use_ssl: bool = True
+    # IMAP TLS options
+    imap_tls_verify: bool = True
+    imap_tls_check_hostname: bool = True
+    imap_tls_cafile: Optional[str] = None
+    imap_tls_capath: Optional[str] = None
     
     class Config:
         env_file = ".env"
