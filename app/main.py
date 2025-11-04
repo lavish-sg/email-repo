@@ -111,7 +111,13 @@ async def health_check():
     
     Returns the current status of the API and its dependencies.
     """
-    uptime = time.time() - app.state.start_time
+    # Handle case where start_time might not be initialized (e.g., on Vercel)
+    start_time = getattr(app.state, 'start_time', None)
+    if start_time is None:
+        app.state.start_time = time.time()
+        start_time = app.state.start_time
+    
+    uptime = time.time() - start_time
     
     return {
         "status": "healthy",
