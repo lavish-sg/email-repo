@@ -92,13 +92,22 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler for unhandled errors."""
+    import traceback
+    # Log the full traceback for debugging (visible in Vercel logs)
+    error_traceback = traceback.format_exc()
+    print(f"ERROR: Unhandled exception: {str(exc)}")
+    print(f"Traceback: {error_traceback}")
+    
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(
             success=False,
             message="Internal server error",
             error_code="INTERNAL_ERROR",
-            details={"error": str(exc)}
+            details={
+                "error": str(exc),
+                "type": type(exc).__name__
+            }
         ).dict()
     )
 

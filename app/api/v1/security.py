@@ -10,6 +10,7 @@ from app.models.security import (
 from app.models.responses import SuccessResponse, ErrorResponse
 from app.services.dns_service import dns_service
 from app.utils.validation_utils import DomainValidator
+from app.utils.gpt_summarizer import gpt_summarizer
 
 def _generate_risk_assessment(overall_status: str, spf_result: dict, dkim_results: list, dmarc_result: dict, final_score: int) -> dict:
     """Generate comprehensive risk assessment description."""
@@ -1071,6 +1072,21 @@ async def scan_domain_security(
         
         # Note: Penalties are already calculated above and included in penalty_details
         
+        # Generate AI summary using GPT (single API call)
+        ai_summary = None
+        if gpt_summarizer.is_available():
+            scan_data_for_summary = {
+                "domain": domain,
+                "score": final_score,
+                "overall_status": overall_status,
+                "recommendations": list(set([r for r in all_recommendations if r is not None])),
+                "risk_assessment": risk_assessment,
+                "summary": [s for s in summary if s is not None],
+                "protocol_status": protocol_status,
+                "scoring_breakdown": scoring_breakdown
+            }
+            ai_summary = gpt_summarizer.generate_summary(scan_data_for_summary)
+        
         # Create result
         try:
             result = SecurityScanResult(
@@ -1094,7 +1110,8 @@ async def scan_domain_security(
                 industry_standard_assessment=industry_risk_assessment,
                 protocol_status=protocol_status,
                 summary_text=summary_text,
-                quick_summary=quick_summary
+                quick_summary=quick_summary,
+                ai_summary=ai_summary
             )
         except Exception as model_error:
             # If model creation fails, return a simplified response
@@ -1116,6 +1133,7 @@ async def scan_domain_security(
                     "protocol_status": protocol_status,
                     "summary_text": summary_text,
                     "quick_summary": quick_summary,
+                    "ai_summary": ai_summary,
                     "error": "Some security records could not be processed due to missing or invalid data"
                 }
             )

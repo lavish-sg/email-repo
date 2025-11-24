@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     ipinfo_token: Optional[str] = None
     virustotal_api_key: Optional[str] = None
     spamhaus_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    openrouter_site_url: Optional[str] = None  # Optional: Site URL for rankings on openrouter.ai
+    openrouter_site_name: Optional[str] = None  # Optional: Site name for rankings on openrouter.ai
     
     # Rate Limiting
     rate_limit_per_minute: int = 60
@@ -46,6 +49,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra environment variables (e.g., old OPENAI_API_KEY)
 
 
 # Global settings instance
