@@ -179,8 +179,13 @@ class SPFParser:
             'all_mechanism': None,
             'ips': [],
             'domains': [],
-            'warnings': []
+            'warnings': [],
+            'lookup_count': 0,
+            'strength': 'Unknown',
+            'mechanism_details': []
         }
+        
+        lookup_count = 0
         
         for part in parts:
             part = part.strip()
@@ -191,44 +196,129 @@ class SPFParser:
                 domain = part[8:]
                 result['includes'].append(domain)
                 result['domains'].append(domain)
+                result['mechanism_details'].append({
+                    'type': 'include',
+                    'value': domain,
+                    'description': f'Authorizes emails from {domain}'
+                })
+                lookup_count += 1
             elif part.startswith('ip4:'):
                 ip = part[4:]
                 result['ips'].append(ip)
+                result['mechanism_details'].append({
+                    'type': 'ip4',
+                    'value': ip,
+                    'description': f'Authorizes IP address {ip}'
+                })
             elif part.startswith('ip6:'):
                 ip = part[4:]
                 result['ips'].append(ip)
+                result['mechanism_details'].append({
+                    'type': 'ip6',
+                    'value': ip,
+                    'description': f'Authorizes IPv6 address {ip}'
+                })
             elif part.startswith('a'):
                 if ':' in part:
                     domain = part[2:]
                     result['domains'].append(domain)
+                    result['mechanism_details'].append({
+                        'type': 'a',
+                        'value': domain,
+                        'description': f'Authorizes A record of {domain}'
+                    })
                 else:
                     result['domains'].append('current')
+                    result['mechanism_details'].append({
+                        'type': 'a',
+                        'value': 'current',
+                        'description': 'Authorizes A record of current domain'
+                    })
+                lookup_count += 1
             elif part.startswith('mx'):
                 if ':' in part:
                     domain = part[3:]
                     result['domains'].append(domain)
+                    result['mechanism_details'].append({
+                        'type': 'mx',
+                        'value': domain,
+                        'description': f'Authorizes MX records of {domain}'
+                    })
                 else:
                     result['domains'].append('current')
+                    result['mechanism_details'].append({
+                        'type': 'mx',
+                        'value': 'current',
+                        'description': 'Authorizes MX records of current domain'
+                    })
+                lookup_count += 1
             elif part.startswith('exists:'):
                 domain = part[7:]
                 result['domains'].append(domain)
+                result['mechanism_details'].append({
+                    'type': 'exists',
+                    'value': domain,
+                    'description': f'Checks if {domain} resolves to an A record'
+                })
+                lookup_count += 1
+            elif part.startswith('ptr'):
+                result['warnings'].append('Use of "ptr" mechanism is discouraged')
+                result['mechanism_details'].append({
+                    'type': 'ptr',
+                    'value': part,
+                    'description': 'Authorizes via reverse DNS (discouraged)'
+                })
+                lookup_count += 1
             elif part in ['all', '+all', '-all', '~all', '?all']:
                 result['all_mechanism'] = part
+                
+                # Determine strength
+                if part == '-all':
+                    result['strength'] = 'Strong'
+                    desc = 'Hard Fail: Unauthorized emails are rejected'
+                elif part == '~all':
+                    result['strength'] = 'Moderate'
+                    desc = 'Soft Fail: Unauthorized emails are accepted but marked'
+                elif part == '?all':
+                    result['strength'] = 'Neutral'
+                    desc = 'Neutral: No policy for unauthorized emails'
+                else: # +all or all
+                    result['strength'] = 'Weak'
+                    desc = 'Pass: All emails are accepted (Insecure)'
+                    
+                result['mechanism_details'].append({
+                    'type': 'all',
+                    'value': part,
+                    'description': desc
+                })
             elif part.startswith('+') or part.startswith('-') or part.startswith('~') or part.startswith('?'):
                 # Qualifier with mechanism
                 result['mechanisms'].append(part)
+                result['mechanism_details'].append({
+                    'type': 'other',
+                    'value': part,
+                    'description': 'Custom mechanism'
+                })
             else:
                 result['mechanisms'].append(part)
+                result['mechanism_details'].append({
+                    'type': 'other',
+                    'value': part,
+                    'description': 'Unknown mechanism'
+                })
+        
+        result['lookup_count'] = lookup_count
         
         # Validation checks
         if not result['all_mechanism']:
             result['warnings'].append('No "all" mechanism found - this is recommended')
+            result['strength'] = 'Neutral' # Default to neutral if missing
         
         if result['all_mechanism'] == '+all':
             result['warnings'].append('Using "+all" allows all servers - consider using "-all" or "~all"')
         
-        if len(result['includes']) > 10:
-            result['warnings'].append('More than 10 include mechanisms may cause DNS lookup issues')
+        if lookup_count > 10:
+            result['warnings'].append(f'Too many DNS lookups ({lookup_count} > 10) - may cause validation failures')
         
         return result
     
@@ -243,7 +333,7 @@ class SPFParser:
         parts = mechanisms.split()
         
         for part in parts:
-            if not re.match(r'^[+\-~?]?(all|include:|ip4:|ip6:|a|mx|exists:|ptr|exp:)$', part.split(':')[0] + ':' if ':' in part else part):
+            if not re.match(r'^[+\-~?]?(all|include:|ip4:|ip6:|a|mx|exists:|ptr|exp:|redirect:)', part.split(':')[0] + ':' if ':' in part else part):
                 return False
         
         return True
@@ -263,7 +353,8 @@ class DKIMParser:
             'public_key': None,
             'key_size': None,
             'notes': None,
-            'warnings': []
+            'warnings': [],
+            'security_profile': 'Unknown'
         }
         
         try:
@@ -300,6 +391,9 @@ class DKIMParser:
                     
                     # Estimate key size (rough calculation)
                     if result['public_key']:
+                        # Base64 decoding length estimation: n * 6 / 8
+                        # But simpler is just checking string length for now as a proxy
+                        # Real implementation would decode base64 and check byte length
                         key_length = len(result['public_key'])
                         if key_length < 200:
                             result['key_size'] = 512
@@ -309,6 +403,16 @@ class DKIMParser:
                             result['key_size'] = 2048
                         else:
                             result['key_size'] = 4096
+                
+                # Determine security profile
+                if result['key_size']:
+                    if result['key_size'] >= 2048:
+                        result['security_profile'] = 'High'
+                    elif result['key_size'] >= 1024:
+                        result['security_profile'] = 'Medium'
+                    else:
+                        result['security_profile'] = 'Low'
+                        result['warnings'].append('Key size is weak (< 1024 bits)')
                 
                 # Add warnings
                 if result['key_size'] and result['key_size'] < 1024:
@@ -339,7 +443,12 @@ class DMARCParser:
             'forensic_uri': [],
             'adkim': 'r',
             'aspf': 'r',
-            'warnings': []
+            'warnings': [],
+            'policy_description': None,
+            'alignment_description': {
+                'spf': 'Relaxed (Default)',
+                'dkim': 'Relaxed (Default)'
+            }
         }
         
         try:
@@ -358,6 +467,12 @@ class DMARCParser:
                     result['version'] = value
                 elif key == 'p':
                     result['policy'] = value
+                    if value == 'reject':
+                        result['policy_description'] = 'Reject: Emails that fail authentication are rejected'
+                    elif value == 'quarantine':
+                        result['policy_description'] = 'Quarantine: Emails that fail authentication are sent to spam'
+                    elif value == 'none':
+                        result['policy_description'] = 'None: Monitoring mode only, no action taken on failure'
                 elif key == 'sp':
                     result['subdomain_policy'] = value
                 elif key == 'pct':
@@ -371,8 +486,16 @@ class DMARCParser:
                     result['forensic_uri'] = [uri.strip() for uri in value.split(',')]
                 elif key == 'adkim':
                     result['adkim'] = value
+                    if value == 's':
+                        result['alignment_description']['dkim'] = 'Strict: DKIM domain must exactly match the From domain'
+                    else:
+                        result['alignment_description']['dkim'] = 'Relaxed: DKIM domain can be a subdomain of the From domain'
                 elif key == 'aspf':
                     result['aspf'] = value
+                    if value == 's':
+                        result['alignment_description']['spf'] = 'Strict: SPF Return-Path must exactly match the From domain'
+                    else:
+                        result['alignment_description']['spf'] = 'Relaxed: SPF Return-Path can be a subdomain of the From domain'
             
             # Validation
             if result['version'] == 'DMARC1':

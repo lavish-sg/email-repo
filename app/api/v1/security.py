@@ -1,29 +1,31 @@
 from fastapi import APIRouter, HTTPException, Query, Path
 from typing import List, Optional
+import asyncio
 from datetime import datetime
 
 from app.models.domain import SecurityScanRequest
 from app.models.security import (
     SPFRecord, DKIMRecord, DMARCRecord, BIMIRecord, TLSRecord, MXRecord,
-    SecurityScanResult, MTASTSRecord, TLSRPTRecord, DNSSECRecord
+    SecurityScanResult, MTASTSRecord, TLSRPTRecord, DNSSECRecord, SecurityStatus
 )
 from app.models.responses import SuccessResponse, ErrorResponse
 from app.services.dns_service import dns_service
 from app.utils.validation_utils import DomainValidator
 from app.utils.gpt_summarizer import gpt_summarizer
 
-def _generate_risk_assessment(overall_status: str, spf_result: dict, dkim_results: list, dmarc_result: dict, final_score: int) -> dict:
+def _generate_risk_assessment(overall_status, spf_result: dict, dkim_results: list, dmarc_result: dict, final_score: int) -> dict:
     """Generate comprehensive risk assessment description."""
     
-    if overall_status == 'high_risk':
+    # Map SecurityStatus to risk levels
+    if overall_status == SecurityStatus.FAIL:  # high_risk
         description = "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements."
         severity = "Critical"
         action_required = "Immediate action required"
-    elif overall_status == 'medium_risk':
+    elif overall_status == SecurityStatus.WARNING:  # medium_risk
         description = "A domain with a medium security risk level shows partial implementation of email security protocols, leaving it vulnerable to targeted attacks and requiring strategic improvements."
         severity = "Moderate"
         action_required = "Action recommended"
-    else:  # low_risk
+    else:  # SecurityStatus.PASS (low_risk)
         description = "A domain with a low security risk level demonstrates strong implementation of email security protocols, providing robust protection against email-based attacks."
         severity = "Low"
         action_required = "Maintain current security posture"
@@ -131,7 +133,7 @@ def _get_industry_standard_status(protocol: str, result: dict, dkim_results: lis
     
     return "Unknown"
 
-def _generate_summary_text(overall_status: str, spf_result: dict, dkim_results: list, dmarc_result: dict, final_score: int, industry_score: int) -> str:
+def _generate_summary_text(overall_status, spf_result: dict, dkim_results: list, dmarc_result: dict, final_score: int, industry_score: int) -> str:
     """Generate dynamic summary text based on actual findings."""
     
     # Get status indicators
@@ -145,21 +147,21 @@ def _generate_summary_text(overall_status: str, spf_result: dict, dkim_results: 
     valid_count = sum(1 for status in [spf_status, dkim_status, dmarc_status] if status == "Valid")
     
     # Generate concise summary based on overall_status (primary) and findings (secondary)
-    if overall_status == 'high_risk':
+    if overall_status == SecurityStatus.FAIL:  # high_risk
         summary = f"Risk Assessment Level: High\n\n"
         if risky_count >= 2:
             summary += "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements."
         else:
             summary += "A domain with a high security risk level indicates significant vulnerabilities in email security protocols, posing a substantial threat of email spoofing and phishing attacks. Immediate action is required to implement missing security measures."
     
-    elif overall_status == 'medium_risk':
+    elif overall_status == SecurityStatus.WARNING:  # medium_risk
         summary = f"Risk Assessment Level: Medium\n\n"
         if warning_count >= 2:
             summary += "A medium security risk level signals notable SPF, DKIM, and DMARC issues, posing a potential risk of email spoofing; prompt resolution is recommended to strengthen overall security."
         else:
             summary += "A medium security risk level indicates some vulnerabilities in email security protocols that should be addressed to improve protection against email-based attacks."
     
-    else:  # low_risk
+    else:  # SecurityStatus.PASS (low_risk)
         summary = f"Risk Assessment Level: Low\n\n"
         if valid_count >= 2:
             summary += "A domain with a low security risk level demonstrates strong implementation of email security protocols, providing robust protection against email-based attacks."
@@ -212,11 +214,11 @@ def _generate_quick_summary(overall_status: str, spf_result: dict, dkim_results:
     valid_count = sum(1 for status in [spf_status, dkim_status, dmarc_status] if status == "Valid")
     
     # Generate quick summary
-    if overall_status == 'high_risk':
+    if overall_status == SecurityStatus.FAIL:  # high_risk
         summary = f"🔴 HIGH RISK - {risky_count} critical issues found"
-    elif overall_status == 'medium_risk':
+    elif overall_status == SecurityStatus.WARNING:  # medium_risk
         summary = f"🟡 MEDIUM RISK - {warning_count} issues to address"
-    else:  # low_risk
+    else:  # SecurityStatus.PASS (low_risk)
         summary = f"🟢 LOW RISK - {valid_count} protocols properly configured"
     
     summary += f" | Score: {industry_score}/10"
@@ -386,272 +388,8 @@ async def scan_domain_security(
         # Validate domain
         domain = DomainValidator.normalize_domain(domain)
         
-        # Check if domain is problematic (has IP but no DNS records)
-        try:
-            from app.utils.dns_utils import dns_resolver
-            a_records = dns_resolver.resolve_a(domain)
-            txt_records = dns_resolver.resolve_txt(domain)
-            mx_records = dns_resolver.resolve_mx(domain)
-            
-            # Handle timeout case for TXT records
-            txt_records_available = txt_records is not None
-            txt_records_list = txt_records if txt_records is not None else []
-            
-            # If domain has no DNS records at all, it's likely problematic
-            if not a_records and not txt_records_list and not mx_records:
-                # Return a consistent SecurityScanResult shape so the frontend can safely render
-                spf_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "mechanisms": [],
-                    "includes": [],
-                    "all_mechanism": None,
-                    "record_count": 0,
-                    "warnings": ["No SPF record found"],
-                    "recommendations": ["Create an SPF record"]
-                }
-                dkim_results: list = []
-                dmarc_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "policy": None,
-                    "subdomain_policy": None,
-                    "percentage": None,
-                    "report_uri": [],
-                    "forensic_uri": [],
-                    "adkim": None,
-                    "aspf": None,
-                    "warnings": ["No DMARC record found"],
-                    "recommendations": ["Create a DMARC record"]
-                }
-                bimi_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "logo_url": None,
-                    "vmc_url": None,
-                    "logo_accessible": False,
-                    "vmc_valid": False,
-                    "warnings": ["No BIMI record found"],
-                    "recommendations": ["BIMI is optional but can improve branding"]
-                }
-                mtasts_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "version": None,
-                    "mode": None,
-                    "max_age": None,
-                    "mx_records": [],
-                    "policy_accessible": False,
-                    "policy_valid": False,
-                    "warnings": ["No MTA-STS record found"],
-                    "recommendations": []
-                }
-                tlsrpt_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "version": None,
-                    "rua": [],
-                    "warnings": ["No TLS-RPT record found"],
-                    "recommendations": []
-                }
-                tls_result = {
-                    "mx_records": [],
-                    "starttls_support": {},
-                    "tls_version": {},
-                    "certificate_valid": {},
-                    "status": "not_found",
-                    "warnings": ["TLS checking not yet implemented"],
-                    "recommendations": ["TLS checking will be available in a future update"]
-                }
-                mx_result = {
-                    "records": [],
-                    "status": "not_found",
-                    "primary_mx": None,
-                    "backup_mx_count": 0,
-                    "security_score": 0,
-                    "open_relay_risk": False,
-                    "warnings": [],
-                    "recommendations": []
-                }
-
-                protocol_status = _generate_protocol_status(
-                    spf_result, dkim_results, dmarc_result, mtasts_result, tlsrpt_result, bimi_result, mx_result
-                )
-
-                result = SecurityScanResult(
-                    domain=domain,
-                    scan_timestamp=datetime.now().isoformat(),
-                    overall_status="not_found",
-                    spf=SPFRecord(**spf_result),
-                    dkim=[DKIMRecord(**dkim) for dkim in dkim_results],
-                    dmarc=DMARCRecord(**dmarc_result),
-                    bimi=BIMIRecord(**bimi_result),
-                    mtasts=MTASTSRecord(**mtasts_result),
-                    tlsrpt=TLSRPTRecord(**tlsrpt_result),
-                    tls=TLSRecord(**tls_result),
-                    mx=MXRecord(**mx_result),
-                    score=0,
-                    overall_score=0,
-                    summary=["Domain has no DNS records"],
-                    recommendations=["This domain appears to be inactive or misconfigured"],
-                    scoring_breakdown=None,
-                    risk_assessment={
-                    "level": "high_risk",
-                    "severity": "Critical",
-                    "description": "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements.",
-                    "action_required": "Immediate action required",
-                    "score": 0,
-                        "critical_vulnerabilities": [
-                            "SPF record missing",
-                            "DKIM records missing",
-                            "DMARC record missing"
-                        ]
-                    },
-                    industry_standard_assessment=None,
-                    protocol_status=protocol_status,
-                    summary_text=None,
-                    quick_summary=None
-                )
-                
-                return SuccessResponse(
-                    success=True,
-                    message="Domain not found or has no DNS records",
-                    data=result
-                )
-            
-            # If domain has IP but no TXT records (and TXT records are available), it's likely problematic
-            if a_records and txt_records_available and not txt_records_list:
-                # Return a consistent SecurityScanResult shape when no security TXT records are present
-                spf_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "mechanisms": [],
-                    "includes": [],
-                    "all_mechanism": None,
-                    "record_count": 0,
-                    "warnings": ["No SPF record found"],
-                    "recommendations": ["Create an SPF record"]
-                }
-                dkim_results: list = []
-                dmarc_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "policy": None,
-                    "subdomain_policy": None,
-                    "percentage": None,
-                    "report_uri": [],
-                    "forensic_uri": [],
-                    "adkim": None,
-                    "aspf": None,
-                    "warnings": ["No DMARC record found"],
-                    "recommendations": ["Create a DMARC record"]
-                }
-                bimi_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "logo_url": None,
-                    "vmc_url": None,
-                    "logo_accessible": False,
-                    "vmc_valid": False,
-                    "warnings": ["No BIMI record found"],
-                    "recommendations": ["BIMI is optional but can improve branding"]
-                }
-                mtasts_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "version": None,
-                    "mode": None,
-                    "max_age": None,
-                    "mx_records": [],
-                    "policy_accessible": False,
-                    "policy_valid": False,
-                    "warnings": ["No MTA-STS record found"],
-                    "recommendations": []
-                }
-                tlsrpt_result = {
-                    "exists": False,
-                    "record": None,
-                    "status": "not_found",
-                    "version": None,
-                    "rua": [],
-                    "warnings": ["No TLS-RPT record found"],
-                    "recommendations": []
-                }
-                tls_result = {
-                    "mx_records": [],
-                    "starttls_support": {},
-                    "tls_version": {},
-                    "certificate_valid": {},
-                    "status": "not_found",
-                    "warnings": ["TLS checking not yet implemented"],
-                    "recommendations": ["TLS checking will be available in a future update"]
-                }
-                mx_result = {
-                    "records": [],
-                    "status": "not_found",
-                    "primary_mx": None,
-                    "backup_mx_count": 0,
-                    "security_score": 0,
-                    "open_relay_risk": False,
-                    "warnings": [],
-                    "recommendations": []
-                }
-
-                protocol_status = _generate_protocol_status(
-                    spf_result, dkim_results, dmarc_result, mtasts_result, tlsrpt_result, bimi_result, mx_result
-                )
-
-                result = SecurityScanResult(
-                    domain=domain,
-                    scan_timestamp=datetime.now().isoformat(),
-                    overall_status="not_found",
-                    spf=SPFRecord(**spf_result),
-                    dkim=[DKIMRecord(**dkim) for dkim in dkim_results],
-                    dmarc=DMARCRecord(**dmarc_result),
-                    bimi=BIMIRecord(**bimi_result),
-                    mtasts=MTASTSRecord(**mtasts_result),
-                    tlsrpt=TLSRPTRecord(**tlsrpt_result),
-                    tls=TLSRecord(**tls_result),
-                    mx=MXRecord(**mx_result),
-                    score=0,
-                    overall_score=0,
-                    summary=["Domain exists but has no security records"],
-                    recommendations=["This domain appears to be inactive or misconfigured"],
-                    scoring_breakdown=None,
-                    risk_assessment={
-                    "level": "high_risk",
-                    "severity": "Critical",
-                    "description": "A domain with a high security risk level indicates critical vulnerabilities in SPF, DKIM, and DMARC, posing a severe threat of email impersonation and phishing attacks, necessitating urgent protocol enhancements.",
-                    "action_required": "Immediate action required",
-                    "score": 0,
-                        "critical_vulnerabilities": [
-                            "SPF record missing",
-                            "DKIM records missing",
-                            "DMARC record missing"
-                        ]
-                    },
-                    industry_standard_assessment=None,
-                    protocol_status=protocol_status,
-                    summary_text=None,
-                    quick_summary=None
-                )
-                
-                return SuccessResponse(
-                    success=True,
-                    message="Domain not found or has no security records",
-                    data=result
-                )
-        except Exception:
-            pass  # Continue with normal scan if check fails
+        # Perform all security checks directly using async methods
+        # (Previous synchronous pre-check removed to prevent blocking)
         
         # Parse DKIM selectors
         if hasattr(dkim_selectors, 'split'):
@@ -661,13 +399,26 @@ async def scan_domain_security(
             selectors = ["default", "google", "selector1", "selector2", "k1", "mandrill", "s1", "s2"]
         
         # Perform all security checks
-        spf_result = await dns_service.get_spf_record(domain)
-        dkim_results = await dns_service.get_dkim_records(domain, selectors)
-        dmarc_result = await dns_service.get_dmarc_record(domain)
-        bimi_result = await dns_service.get_bimi_record(domain)
-        mtasts_result = await dns_service.get_mtasts_record(domain)
-        tlsrpt_result = await dns_service.get_tlsrpt_record(domain)
-        mx_result = await dns_service.get_mx_records(domain)
+        # Perform all security checks in parallel
+        results = await asyncio.gather(
+            dns_service.get_spf_record(domain),
+            dns_service.get_dkim_records(domain, selectors),
+            dns_service.get_dmarc_record(domain),
+            dns_service.get_bimi_record(domain),
+            dns_service.get_mtasts_record(domain),
+            dns_service.get_tlsrpt_record(domain),
+            dns_service.get_mx_records(domain),
+            return_exceptions=True
+        )
+        
+        # Unpack results, handling potential exceptions
+        spf_result = results[0] if not isinstance(results[0], Exception) else {}
+        dkim_results = results[1] if not isinstance(results[1], Exception) else []
+        dmarc_result = results[2] if not isinstance(results[2], Exception) else {}
+        bimi_result = results[3] if not isinstance(results[3], Exception) else {}
+        mtasts_result = results[4] if not isinstance(results[4], Exception) else {}
+        tlsrpt_result = results[5] if not isinstance(results[5], Exception) else {}
+        mx_result = results[6] if not isinstance(results[6], Exception) else {}
         
         # Ensure all results are dictionaries
         spf_result = spf_result or {}
@@ -910,13 +661,14 @@ async def scan_domain_security(
             # This is likely a properly configured domain with DNS timeout issues
             final_score = min(100, final_score + 15)  # Bonus up to 15 points
         
-        # Determine risk level based on industry standards (Easy DMARC style)
+        # Determine overall status based on score
+        # Map score to SecurityStatus enum (pass/warning/fail)
         if final_score >= 90:
-            overall_status = 'low_risk'
+            overall_status = SecurityStatus.PASS  # Low risk = pass
         elif final_score >= 70:
-            overall_status = 'medium_risk'
+            overall_status = SecurityStatus.WARNING  # Medium risk = warning
         else:
-            overall_status = 'high_risk'
+            overall_status = SecurityStatus.FAIL  # High risk = fail
         
         # Industry standard risk assessment
         if industry_score >= 8:
@@ -1357,4 +1109,93 @@ async def get_mx_records(domain: str):
             data=result
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/reverse-dns/{ip_address}")
+async def get_reverse_dns(
+    ip_address: str = Path(..., description="IP address to lookup")
+):
+    """
+    Perform reverse DNS (PTR) lookup for an IP address.
+    
+    Args:
+        ip_address: IP address to lookup
+        
+    Returns:
+        Reverse DNS lookup result including hostname and forward confirmation
+    """
+    try:
+        result = await dns_service.get_reverse_dns(ip_address)
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Reverse DNS lookup completed for {ip_address}",
+            data=result
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/port-scan/{hostname}")
+async def scan_mail_ports(
+    hostname: str = Path(..., description="Hostname or IP address to scan"),
+    timeout: float = Query(3.0, description="Connection timeout in seconds", ge=0.5, le=10.0)
+):
+    """
+    Scan common mail server ports (SMTP, IMAP, POP3) for a hostname.
+    
+    Args:
+        hostname: Hostname or IP address to scan
+        timeout: Connection timeout in seconds (default: 3.0)
+        
+    Returns:
+        Port scan results showing which mail ports are open/closed
+    """
+    try:
+        result = await dns_service.scan_mail_ports(hostname, timeout)
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Port scan completed for {hostname}",
+            data=result
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/blacklist-check/{ip_address}")
+async def check_blacklists(
+    ip_address: str = Path(..., description="IP address to check against RBLs"),
+    timeout: float = Query(2.0, description="DNS query timeout in seconds", ge=0.5, le=5.0)
+):
+    """
+    Check if an IP address is listed on multiple RBL (Real-time Blackhole List) providers.
+    
+    Checks against major RBL providers including:
+    - Spamhaus ZEN
+    - SpamCop
+    - Barracuda
+    - SORBS
+    - PSBL
+    - UCEPROTECT
+    - CBL (Composite Blocking List)
+    - DroneBL
+    
+    Args:
+        ip_address: IP address to check
+        timeout: DNS query timeout in seconds (default: 2.0)
+        
+    Returns:
+        Blacklist check results with detailed status per RBL provider
+    """
+    try:
+        result = await dns_service.check_blacklists(ip_address, timeout)
+        
+        return SuccessResponse(
+            success=True,
+            message=f"Blacklist check completed for {ip_address}",
+            data=result
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

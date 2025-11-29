@@ -422,7 +422,7 @@ uploads/
 downloads/
 cache/
 data/
-models/
+
 *.model
 *.pkl
 *.joblib
@@ -686,7 +686,7 @@ uploads/
 downloads/
 cache/
 data/
-models/
+
 *.model
 *.pkl
 *.joblib

@@ -29,10 +29,11 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Get TXT records (with fallback resolvers on timeout)
+            # Wrap synchronous DNS call in asyncio.to_thread to prevent blocking
             if hasattr(self.resolver, 'resolve_txt_with_fallback'):
-                txt_records = self.resolver.resolve_txt_with_fallback(domain)
+                txt_records = await asyncio.to_thread(self.resolver.resolve_txt_with_fallback, domain)
             else:
-                txt_records = self.resolver.resolve_txt(domain)
+                txt_records = await asyncio.to_thread(self.resolver.resolve_txt, domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -122,7 +123,10 @@ class DNSService:
                 'all_mechanism': parsed.get('all_mechanism') if parsed else None,
                 'record_count': 1,
                 'warnings': parsed.get('warnings', []) if parsed else [],
-                'recommendations': self._get_spf_recommendations(parsed)
+                'recommendations': self._get_spf_recommendations(parsed),
+                'lookup_count': parsed.get('lookup_count', 0) if parsed else 0,
+                'strength': parsed.get('strength', 'Unknown') if parsed else 'Unknown',
+                'mechanism_details': parsed.get('mechanism_details', []) if parsed else []
             }
             
         except Exception as e:
@@ -164,9 +168,9 @@ class DNSService:
                 
                 # Get TXT records (with fallback resolvers on timeout)
                 if hasattr(self.resolver, 'resolve_txt_with_fallback'):
-                    txt_records = self.resolver.resolve_txt_with_fallback(dkim_domain)
+                    txt_records = await asyncio.to_thread(self.resolver.resolve_txt_with_fallback, dkim_domain)
                 else:
-                    txt_records = self.resolver.resolve_txt(dkim_domain)
+                    txt_records = await asyncio.to_thread(self.resolver.resolve_txt, dkim_domain)
                 
                 # Handle timeout case
                 if txt_records is None:
@@ -239,7 +243,8 @@ class DNSService:
                     'key_type': parsed.get('key_type') if parsed else None,
                     'key_size': parsed.get('key_size') if parsed else None,
                     'warnings': parsed.get('warnings', []) if parsed else [],
-                    'recommendations': self._get_dkim_recommendations(parsed)
+                    'recommendations': self._get_dkim_recommendations(parsed),
+                    'security_profile': parsed.get('security_profile', 'Unknown') if parsed else 'Unknown'
                 })
                 
             except Exception as e:
@@ -277,9 +282,9 @@ class DNSService:
             
             # Get TXT records (with fallback resolvers on timeout)
             if hasattr(self.resolver, 'resolve_txt_with_fallback'):
-                txt_records = self.resolver.resolve_txt_with_fallback(dmarc_domain)
+                txt_records = await asyncio.to_thread(self.resolver.resolve_txt_with_fallback, dmarc_domain)
             else:
-                txt_records = self.resolver.resolve_txt(dmarc_domain)
+                txt_records = await asyncio.to_thread(self.resolver.resolve_txt, dmarc_domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -367,7 +372,9 @@ class DNSService:
                 'adkim': parsed.get('adkim') if parsed else None,
                 'aspf': parsed.get('aspf') if parsed else None,
                 'warnings': parsed.get('warnings', []) if parsed else [],
-                'recommendations': self._get_dmarc_recommendations(parsed)
+                'recommendations': self._get_dmarc_recommendations(parsed),
+                'policy_description': parsed.get('policy_description') if parsed else None,
+                'alignment_description': parsed.get('alignment_description') if parsed else None
             }
             
         except Exception as e:
@@ -401,7 +408,8 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Get TXT records for MTA-STS
-            txt_records = self.resolver.resolve_txt(domain)
+            mta_sts_domain = f'_mta-sts.{domain}'
+            txt_records = await asyncio.to_thread(self.resolver.resolve_txt, mta_sts_domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -526,7 +534,8 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Get TXT records for TLS-RPT
-            txt_records = self.resolver.resolve_txt(domain)
+            tlsrpt_domain = f'_smtp._tls.{domain}'
+            txt_records = await asyncio.to_thread(self.resolver.resolve_txt, tlsrpt_domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -619,7 +628,7 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Check DNSSEC status
-            dnssec_result = self.resolver.check_dnssec(domain)
+            dnssec_result = await asyncio.to_thread(self.resolver.check_dnssec, domain)
             
             # Determine status
             if dnssec_result['enabled']:
@@ -674,7 +683,7 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Get MX records
-            mx_records = self.resolver.resolve_mx(domain)
+            mx_records = await asyncio.to_thread(self.resolver.resolve_mx, domain)
             
             if not mx_records:
                 return {
@@ -823,7 +832,8 @@ class DNSService:
             domain = DomainValidator.normalize_domain(domain)
             
             # Get TXT records
-            txt_records = self.resolver.resolve_txt(domain)
+            bimi_domain = f'default._bimi.{domain}'
+            txt_records = await asyncio.to_thread(self.resolver.resolve_txt, bimi_domain)
             
             # Handle timeout case
             if txt_records is None:
@@ -1311,7 +1321,397 @@ class DNSService:
             recommendations.append('Consider reducing the number of MX records')
         
         return recommendations
+    
+    async def get_reverse_dns(self, ip_address: str) -> Dict[str, Any]:
+        """
+        Perform reverse DNS (PTR) lookup for an IP address.
+        
+        Args:
+            ip_address: IP address to lookup
+            
+        Returns:
+            Reverse DNS lookup result
+        """
+        try:
+            import ipaddress
+            import socket
+            
+            # Validate IP address
+            try:
+                ip_obj = ipaddress.ip_address(ip_address)
+            except ValueError:
+                return {
+                    'ip_address': ip_address,
+                    'exists': False,
+                    'status': SecurityStatus.ERROR,
+                    'hostnames': [],
+                    'warnings': [f'Invalid IP address: {ip_address}'],
+                    'recommendations': ['Provide a valid IPv4 or IPv6 address']
+                }
+            
+            # Perform reverse DNS lookup
+            try:
+                hostnames = socket.gethostbyaddr(ip_address)
+                hostname = hostnames[0]
+                aliases = hostnames[1]
+                
+                # Verify forward DNS matches
+                forward_match = False
+                try:
+                    forward_ips = socket.gethostbyname_ex(hostname)[2]
+                    forward_match = ip_address in forward_ips
+                except:
+                    pass
+                
+                status = SecurityStatus.PASS if forward_match else SecurityStatus.WARNING
+                warnings = []
+                recommendations = []
+                
+                if not forward_match:
+                    warnings.append('Reverse DNS does not match forward DNS (FCrDNS mismatch)')
+                    recommendations.append('Ensure forward and reverse DNS records match for better email deliverability')
+                
+                return {
+                    'ip_address': ip_address,
+                    'exists': True,
+                    'status': status,
+                    'hostname': hostname,
+                    'aliases': aliases,
+                    'forward_match': forward_match,
+                    'warnings': warnings,
+                    'recommendations': recommendations
+                }
+                
+            except socket.herror:
+                return {
+                    'ip_address': ip_address,
+                    'exists': False,
+                    'status': SecurityStatus.WARNING,
+                    'hostname': None,
+                    'aliases': [],
+                    'forward_match': False,
+                    'warnings': ['No PTR record found for this IP address'],
+                    'recommendations': [
+                        'Configure reverse DNS (PTR) record for better email deliverability',
+                        'Contact your hosting provider to set up PTR records'
+                    ]
+                }
+                
+        except Exception as e:
+            return {
+                'ip_address': ip_address,
+                'exists': False,
+                'status': SecurityStatus.ERROR,
+                'hostname': None,
+                'aliases': [],
+                'forward_match': False,
+                'warnings': [f'Error performing reverse DNS lookup: {str(e)}'],
+                'recommendations': ['Check IP address and try again']
+            }
+    
+    async def scan_mail_ports(self, hostname: str, timeout: float = 3.0) -> Dict[str, Any]:
+        """
+        Scan common mail server ports to check availability.
+        
+        Args:
+            hostname: Hostname or IP address to scan
+            timeout: Connection timeout in seconds
+            
+        Returns:
+            Port scan results
+        """
+        import socket
+        from datetime import datetime
+
+        # Common mail server ports
+        ports = {
+            25: 'SMTP',
+            587: 'SMTP Submission',
+            465: 'SMTPS (SSL)',
+            143: 'IMAP',
+            993: 'IMAPS (SSL)',
+            110: 'POP3',
+            995: 'POP3S (SSL)'
+        }
+        
+        results = {
+            'hostname': hostname,
+            'scan_timestamp': datetime.utcnow().isoformat(),
+            'ports': {},
+            'open_ports': [],
+            'closed_ports': [],
+            'status': SecurityStatus.PASS,
+            'warnings': [],
+            'recommendations': []
+        }
+        
+        try:
+            # Resolve hostname to IP
+            try:
+                ip_address = socket.gethostbyname(hostname)
+                results['ip_address'] = ip_address
+            except socket.gaierror:
+                return {
+                    'hostname': hostname,
+                    'scan_timestamp': datetime.utcnow().isoformat(),
+                    'ports': {},
+                    'open_ports': [],
+                    'closed_ports': [],
+                    'status': SecurityStatus.ERROR,
+                    'warnings': [f'Could not resolve hostname: {hostname}'],
+                    'recommendations': ['Check hostname and DNS configuration']
+                }
+            
+            # Scan each port
+            for port, service in ports.items():
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(timeout)
+                    result = sock.connect_ex((ip_address, port))
+                    sock.close()
+                    
+                    is_open = result == 0
+                    
+                    results['ports'][port] = {
+                        'service': service,
+                        'open': is_open,
+                        'status': 'Open' if is_open else 'Closed/Filtered'
+                    }
+                    
+                    if is_open:
+                        results['open_ports'].append(port)
+                    else:
+                        results['closed_ports'].append(port)
+                        
+                except Exception as e:
+                    results['ports'][port] = {
+                        'service': service,
+                        'open': False,
+                        'status': 'Error',
+                        'error': str(e)
+                    }
+                    results['closed_ports'].append(port)
+            
+            # Generate recommendations
+            if 25 not in results['open_ports']:
+                results['warnings'].append('Port 25 (SMTP) is not accessible')
+                results['recommendations'].append('Ensure SMTP port 25 is open for receiving emails')
+            
+            if 587 not in results['open_ports'] and 465 not in results['open_ports']:
+                results['warnings'].append('No secure SMTP submission ports (587, 465) are open')
+                results['recommendations'].append('Configure port 587 (SMTP Submission) or 465 (SMTPS) for secure email sending')
+            
+            if 993 in results['open_ports'] or 995 in results['open_ports']:
+                results['recommendations'].append('Secure IMAP/POP3 ports are available - good for security')
+            
+            if 143 in results['open_ports'] or 110 in results['open_ports']:
+                results['warnings'].append('Insecure IMAP/POP3 ports (143, 110) are open')
+                results['recommendations'].append('Consider disabling insecure IMAP/POP3 and use only SSL/TLS versions (993, 995)')
+            
+            # Set overall status
+            if len(results['warnings']) > 2:
+                results['status'] = SecurityStatus.WARNING
+            elif len(results['open_ports']) == 0:
+                results['status'] = SecurityStatus.FAIL
+                results['warnings'].append('No mail server ports are accessible')
+            
+            return results
+            
+        except Exception as e:
+            return {
+                'hostname': hostname,
+                'scan_timestamp': datetime.utcnow().isoformat(),
+                'ports': {},
+                'open_ports': [],
+                'closed_ports': [],
+                'status': SecurityStatus.ERROR,
+                'warnings': [f'Error scanning ports: {str(e)}'],
+                'recommendations': ['Check network connectivity and firewall settings']
+            }
+    
+    async def check_blacklists(self, ip_address: str, timeout: float = 2.0) -> Dict[str, Any]:
+        """
+        Check if an IP address is listed on multiple RBL (Real-time Blackhole List) providers.
+        
+        Args:
+            ip_address: IP address to check
+            timeout: DNS query timeout in seconds
+            
+        Returns:
+            Blacklist check results
+        """
+        import ipaddress
+        import dns.resolver
+        import dns.exception
+        
+        # Major RBL providers
+        rbls = {
+            'zen.spamhaus.org': {
+                'name': 'Spamhaus ZEN',
+                'description': 'Combined list of Spamhaus blocklists',
+                'severity': 'high'
+            },
+            'bl.spamcop.net': {
+                'name': 'SpamCop',
+                'description': 'SpamCop Blocking List',
+                'severity': 'high'
+            },
+            'b.barracudacentral.org': {
+                'name': 'Barracuda',
+                'description': 'Barracuda Reputation Block List',
+                'severity': 'medium'
+            },
+            'dnsbl.sorbs.net': {
+                'name': 'SORBS',
+                'description': 'Spam and Open Relay Blocking System',
+                'severity': 'medium'
+            },
+            'psbl.surriel.com': {
+                'name': 'PSBL',
+                'description': 'Passive Spam Block List',
+                'severity': 'medium'
+            },
+            'dnsbl-1.uceprotect.net': {
+                'name': 'UCEPROTECT Level 1',
+                'description': 'UCEPROTECT Network blacklist',
+                'severity': 'low'
+            },
+            'cbl.abuseat.org': {
+                'name': 'CBL',
+                'description': 'Composite Blocking List',
+                'severity': 'high'
+            },
+            'dnsbl.dronebl.org': {
+                'name': 'DroneBL',
+                'description': 'Drone and botnet blacklist',
+                'severity': 'high'
+            }
+        }
+        
+        results = {
+            'ip_address': ip_address,
+            'check_timestamp': datetime.utcnow().isoformat(),
+            'is_blacklisted': False,
+            'blacklisted_on': [],
+            'not_blacklisted_on': [],
+            'errors': [],
+            'total_checked': 0,
+            'total_blacklisted': 0,
+            'status': SecurityStatus.PASS,
+            'warnings': [],
+            'recommendations': [],
+            'details': {}
+        }
+        
+        try:
+            # Validate IP address
+            try:
+                ip_obj = ipaddress.ip_address(ip_address)
+            except ValueError:
+                return {
+                    'ip_address': ip_address,
+                    'check_timestamp': datetime.utcnow().isoformat(),
+                    'is_blacklisted': False,
+                    'blacklisted_on': [],
+                    'not_blacklisted_on': [],
+                    'errors': [f'Invalid IP address: {ip_address}'],
+                    'total_checked': 0,
+                    'total_blacklisted': 0,
+                    'status': SecurityStatus.ERROR,
+                    'warnings': ['Provide a valid IPv4 or IPv6 address'],
+                    'recommendations': [],
+                    'details': {}
+                }
+            
+            # Reverse the IP for DNSBL query
+            if isinstance(ip_obj, ipaddress.IPv4Address):
+                reversed_ip = '.'.join(reversed(ip_address.split('.')))
+            else:
+                # IPv6 handling
+                expanded = ip_obj.exploded.replace(':', '')
+                reversed_ip = '.'.join(reversed(expanded))
+            
+            # Check each RBL
+            for rbl_host, rbl_info in rbls.items():
+                results['total_checked'] += 1
+                query = f"{reversed_ip}.{rbl_host}"
+                
+                try:
+                    # Create a resolver with timeout
+                    resolver = dns.resolver.Resolver()
+                    resolver.timeout = timeout
+                    resolver.lifetime = timeout
+                    
+                    # Query the RBL
+                    answers = resolver.resolve(query, 'A')
+                    
+                    # If we get a response, the IP is blacklisted
+                    return_codes = [str(rdata) for rdata in answers]
+                    
+                    results['is_blacklisted'] = True
+                    results['total_blacklisted'] += 1
+                    results['blacklisted_on'].append(rbl_info['name'])
+                    
+                    results['details'][rbl_info['name']] = {
+                        'listed': True,
+                        'rbl_host': rbl_host,
+                        'description': rbl_info['description'],
+                        'severity': rbl_info['severity'],
+                        'return_codes': return_codes,
+                        'query': query
+                    }
+                    
+                except dns.resolver.NXDOMAIN:
+                    # Not listed on this RBL (expected for clean IPs)
+                    results['not_blacklisted_on'].append(rbl_info['name'])
+                    results['details'][rbl_info['name']] = {
+                        'listed': False,
+                        'rbl_host': rbl_host,
+                        'description': rbl_info['description'],
+                        'severity': rbl_info['severity']
+                    }
+                    
+                except dns.resolver.Timeout:
+                    results['errors'].append(f"Timeout checking {rbl_info['name']}")
+                    
+                except dns.exception.DNSException as e:
+                    results['errors'].append(f"Error checking {rbl_info['name']}: {str(e)}")
+                    
+                except Exception as e:
+                    results['errors'].append(f"Unexpected error checking {rbl_info['name']}: {str(e)}")
+            
+            # Determine overall status
+            if results['total_blacklisted'] > 0:
+                results['status'] = SecurityStatus.FAIL
+                results['warnings'].append(f"IP is blacklisted on {results['total_blacklisted']} RBL(s)")
+                results['recommendations'].append('Contact the RBL providers to request delisting')
+                results['recommendations'].append('Investigate the source of spam/abuse from this IP')
+                results['recommendations'].append('Implement better email security practices')
+            else:
+                results['status'] = SecurityStatus.PASS
+                results['recommendations'].append('IP has a clean reputation across checked RBLs')
+            
+            if len(results['errors']) > 0:
+                results['warnings'].append(f"{len(results['errors'])} RBL check(s) failed")
+            
+            return results
+            
+        except Exception as e:
+            return {
+                'ip_address': ip_address,
+                'check_timestamp': datetime.utcnow().isoformat(),
+                'is_blacklisted': False,
+                'blacklisted_on': [],
+                'not_blacklisted_on': [],
+                'errors': [f'Error performing blacklist check: {str(e)}'],
+                'total_checked': 0,
+                'total_blacklisted': 0,
+                'status': SecurityStatus.ERROR,
+                'warnings': ['Blacklist check failed'],
+                'recommendations': ['Try again later or check manually'],
+                'details': {}
+            }
 
 
 # Global DNS service instance
-dns_service = DNSService() 
+dns_service = DNSService()

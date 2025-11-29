@@ -121,27 +121,76 @@ class SPFGenerator:
     """SPF record generator."""
     
     # Common email provider SPF includes
+    # Organized by category for better maintenance
     PROVIDER_INCLUDES = {
+        # Major Email Platforms
         'google': '_spf.google.com',
+        'gmail': '_spf.google.com',
+        'google_workspace': '_spf.google.com',
         'outlook': '_spf.protection.outlook.com',
         'office365': '_spf.protection.outlook.com',
+        'microsoft365': '_spf.protection.outlook.com',
+        'microsoft365_gcc': 'spf-a.outlook.com',  # Government Cloud
+        'zoho': 'zoho.com',
+        'zoho_mail': 'zoho.com',
+        'yahoo': 'yahoo.com',
+        'protonmail': '_spf.protonmail.ch',
+        'fastmail': 'spf.messagingengine.com',
+        'icloud': 'icloud.com',
+        'aol': 'aol.com',
+        'rackspace': 'emailsrvr.com',
+        'godaddy': 'secureserver.net',
+        
+        # Transactional Email Services
         'sendgrid': '_spf.sendgrid.net',
         'mailgun': '_spf.mailgun.org',
-        'amazonses': '_spf.amazonaws.com',
+        'amazonses': 'amazonses.com',
+        'amazon_ses': 'amazonses.com',
+        'postmark': 'spf.mtasv.net',
+        'sparkpost': '_spf.sparkpostmail.com',
+        'mandrill': 'spf.mandrillapp.com',
+        'sendinblue': 'spf.sendinblue.com',
+        'brevo': 'spf.sendinblue.com',  # Sendinblue rebranded to Brevo
+        'elastic_email': 'elasticemail.com',
+        'socketlabs': '_spf.socketlabs.com',
+        
+        # Marketing & Email Campaign Platforms
         'mailchimp': '_spf.mailchimp.com',
         'constant_contact': '_spf.constantcontact.com',
         'hubspot': '_spf.hubspot.com',
         'salesforce': '_spf.salesforce.com',
-        'zendesk': '_spf.zendesk.com',
-        'intercom': '_spf.intercom.io',
+        'pardot': '_spf.salesforce.com',
         'klaviyo': '_spf.klaviyo.com',
         'convertkit': '_spf.convertkit.com',
         'activecampaign': '_spf.activecampaign.com',
         'drip': '_spf.drip.com',
         'getresponse': '_spf.getresponse.com',
         'aweber': '_spf.aweber.com',
+        'campaign_monitor': 'cmail1.com',
+        'omnisend': '_spf.omnisend.com',
+        'mailerlite': '_spf.mailerlite.com',
+        'sendy': 'amazonses.com',  # Sendy typically uses SES
+        'moosend': '_spf.moosend.com',
+        
+        # Customer Support & CRM
+        'zendesk': '_spf.zendesk.com',
+        'intercom': '_spf.intercom.io',
+        'freshdesk': '_spf.freshdesk.com',
+        'helpscout': '_spf.helpscout.net',
+        'drift': '_spf.drift.com',
+        
+        # Legacy Marketing Automation
         'infusionsoft': '_spf.infusionsoft.com',
-        'ontraport': '_spf.ontraport.com'
+        'keap': '_spf.infusionsoft.com',  # Infusionsoft rebranded to Keap
+        'ontraport': '_spf.ontraport.com',
+        'autopilot': '_spf.autopilothq.com',
+        
+        # E-commerce & Business Platforms
+        'shopify': 'shops.shopify.com',
+        'stripe': '_spf.stripe.com',
+        'square': '_spf.squareup.com',
+        'paypal': '_spf.paypal.com',
+        'quickbooks': 'notification.intuit.com',
     }
     
     @staticmethod
@@ -179,9 +228,216 @@ class SPFGenerator:
         return ' '.join(mechanisms)
     
     @staticmethod
-    def get_available_providers() -> Dict[str, str]:
-        """Get list of available email providers."""
+    def get_available_providers() -> Dict[str, Any]:
+        """Get list of available email providers with metadata and categories."""
+        # Provider categories for better organization
+        categories = {
+            'email': {
+                'name': 'Email Platforms',
+                'providers': ['google', 'gmail', 'google_workspace', 'outlook', 'office365', 
+                             'microsoft365', 'microsoft365_gcc', 'zoho', 'zoho_mail', 'yahoo', 
+                             'protonmail', 'fastmail', 'icloud', 'aol', 'rackspace', 'godaddy']
+            },
+            'transactional': {
+                'name': 'Transactional Email Services',
+                'providers': ['sendgrid', 'mailgun', 'amazonses', 'amazon_ses', 'postmark', 
+                             'sparkpost', 'mandrill', 'sendinblue', 'brevo', 'elastic_email', 
+                             'socketlabs']
+            },
+            'marketing': {
+                'name': 'Marketing & Campaigns',
+                'providers': ['mailchimp', 'constant_contact', 'hubspot', 'klaviyo', 
+                             'convertkit', 'activecampaign', 'drip', 'getresponse', 'aweber', 
+                             'campaign_monitor', 'omnisend', 'mailerlite', 'sendy', 'moosend']
+            },
+            'crm': {
+                'name': 'CRM & Support',
+                'providers': ['salesforce', 'pardot', 'zendesk', 'intercom', 'freshdesk', 
+                             'helpscout', 'drift', 'infusionsoft', 'keap', 'ontraport', 
+                             'autopilot']
+            },
+            'ecommerce': {
+                'name': 'E-commerce & Business',
+                'providers': ['shopify', 'stripe', 'square', 'paypal', 'quickbooks']
+            }
+        }
+        
+        # Popular providers (most commonly used)
+        popular = ['google', 'outlook', 'sendgrid', 'mailgun', 'mailchimp', 
+                  'amazonses', 'hubspot', 'zoho']
+        
+        # Build provider data with metadata
+        providers_data = {}
+        for key, include in SPFGenerator.PROVIDER_INCLUDES.items():
+            providers_data[key] = {
+                'include': include,
+                'popular': key in popular,
+                'category': next((cat for cat, data in categories.items() 
+                                if key in data['providers']), 'other')
+            }
+        
+        return {
+            'providers': providers_data,
+            'categories': categories,
+            'popular': popular,
+            'total': len(SPFGenerator.PROVIDER_INCLUDES)
+        }
+    
+    @staticmethod
+    def get_providers_simple() -> Dict[str, str]:
+        """Get simple key-value list of providers (backward compatibility)."""
         return SPFGenerator.PROVIDER_INCLUDES.copy()
+
+
+class SPFOptimizer:
+    """SPF record optimizer and analyzer."""
+    
+    @staticmethod
+    def analyze_spf_record(record: str) -> Dict[str, Any]:
+        """
+        Analyze SPF record for potential issues.
+        
+        Args:
+            record: SPF record to analyze
+            
+        Returns:
+            Analysis result with warnings and recommendations
+        """
+        result = {
+            'valid': False,
+            'lookup_count': 0,
+            'mechanisms': [],
+            'warnings': [],
+            'errors': [],
+            'recommendations': [],
+            'record_length': len(record),
+            'max_length': 255
+        }
+        
+        try:
+            # Check if valid SPF record
+            if not record.startswith('v=spf1'):
+                result['errors'].append('SPF record must start with "v=spf1"')
+                return result
+            
+            # Parse mechanisms
+            parts = record.split()
+            result['mechanisms'] = parts[1:]  # Skip v=spf1
+            
+            # Count DNS lookups
+            lookup_mechanisms = ['include', 'a', 'mx', 'exists', 'redirect']
+            for part in result['mechanisms']:
+                mechanism_type = part.split(':')[0].replace('+', '').replace('-', '').replace('~', '').replace('?', '')
+                if mechanism_type in lookup_mechanisms:
+                    result['lookup_count'] += 1
+            
+            # Check lookup limit
+            if result['lookup_count'] > 10:
+                result['errors'].append(f'SPF record exceeds DNS lookup limit (10): {result["lookup_count"]} lookups')
+                result['recommendations'].append('Consider flattening SPF includes to reduce lookups')
+            elif result['lookup_count'] > 8:
+                result['warnings'].append(f'SPF record approaching DNS lookup limit: {result["lookup_count"]}/10')
+                result['recommendations'].append('Monitor SPF includes to avoid exceeding limit')
+            
+            # Check record length
+            if result['record_length'] > 255:
+                result['errors'].append(f'SPF record exceeds 255 characters: {result["record_length"]}')
+                result['recommendations'].append('Split SPF record into multiple TXT strings')
+            elif result['record_length'] > 200:
+                result['warnings'].append(f'SPF record approaching character limit: {result["record_length"]}/255')
+            
+            # Check for all mechanism
+            all_mechanisms = [p for p in result['mechanisms'] if p in ['~all', '-all', '+all', '?all']]
+            if not all_mechanisms:
+                result['warnings'].append('No "all" mechanism found - consider adding ~all or -all')
+                result['recommendations'].append('Add "~all" for soft fail or "-all" for hard fail')
+            elif len(all_mechanisms) > 1:
+                result['errors'].append('Multiple "all" mechanisms found')
+            elif all_mechanisms[0] != result['mechanisms'][-1]:
+                result['warnings'].append('"all" mechanism should be the last mechanism')
+            
+            # Check for duplicate includes
+            includes = [p.split(':')[1] for p in result['mechanisms'] if p.startswith('include:')]
+            if len(includes) != len(set(includes)):
+                duplicates = [inc for inc in includes if includes.count(inc) > 1]
+                result['warnings'].append(f'Duplicate includes found: {", ".join(set(duplicates))}')
+                result['recommendations'].append('Remove duplicate include mechanisms')
+            
+            # Check for ip4/ip6 without CIDR
+            for part in result['mechanisms']:
+                if part.startswith('ip4:') and '/' not in part:
+                    result['recommendations'].append(f'Consider specifying CIDR for {part}')
+                if part.startswith('ip6:') and '/' not in part:
+                    result['recommendations'].append(f'Consider specifying CIDR for {part}')
+            
+            result['valid'] = len(result['errors']) == 0
+            
+        except Exception as e:
+            result['errors'].append(f'Error analyzing SPF record: {str(e)}')
+        
+        return result
+    
+    @staticmethod
+    def get_optimization_suggestions(record: str) -> Dict[str, Any]:
+        """
+        Get optimization suggestions for an SPF record.
+        
+        Args:
+            record: SPF record to optimize
+            
+        Returns:
+            Optimization suggestions
+        """
+        analysis = SPFOptimizer.analyze_spf_record(record)
+        
+        suggestions = {
+            'current_record': record,
+            'analysis': analysis,
+            'optimizations': [],
+            'estimated_improvement': {}
+        }
+        
+        # Suggest removing duplicates
+        mechanisms = record.split()[1:]
+        unique_mechanisms = []
+        seen = set()
+        for mech in mechanisms:
+            if mech not in seen:
+                unique_mechanisms.append(mech)
+                seen.add(mech)
+        
+        if len(unique_mechanisms) < len(mechanisms):
+            optimized = f'v=spf1 {" ".join(unique_mechanisms)}'
+            suggestions['optimizations'].append({
+                'type': 'remove_duplicates',
+                'description': 'Remove duplicate mechanisms',
+                'optimized_record': optimized
+            })
+        
+        # Suggest moving 'all' to end
+        all_mech = None
+        other_mechs = []
+        for mech in unique_mechanisms:
+            if mech in ['~all', '-all', '+all', '?all']:
+                all_mech = mech
+            else:
+                other_mechs.append(mech)
+        
+        if all_mech and unique_mechanisms[-1] != all_mech:
+            optimized = f'v=spf1 {" ".join(other_mechs)} {all_mech}'
+            suggestions['optimizations'].append({
+                'type': 'reorder_all',
+                'description': 'Move "all" mechanism to end',
+                'optimized_record': optimized
+            })
+        
+        # Estimate improvement
+        suggestions['estimated_improvement'] = {
+            'lookup_reduction': 0,  # Would need DNS resolution to calculate
+            'length_reduction': max(0, len(record) - len(suggestions['optimizations'][-1]['optimized_record']) if suggestions['optimizations'] else 0)
+        }
+        
+        return suggestions
 
 
 class DMARCGenerator:

@@ -2,20 +2,48 @@
 
 "Protect Your Domain. Validate Email Security. Stay Off Blacklists." 🎯
 
-A powerful Python FastAPI backend that provides comprehensive domain security scanning, DNS record validation, and email security configuration tools.
+A powerful Python FastAPI backend that provides comprehensive domain security scanning, DNS record validation, and email security configuration tools with production-grade edge case handling.
 
 ## Features
 
-### Core Security Checks
-- ✅ **SPF Check** - Validates existence, syntax, and detects overly broad/multiple SPF records
-- ✅ **DKIM Check** - Checks DNS for valid DKIM selectors and public keys
-- ✅ **DMARC Check** - Analyzes DMARC policy, report URIs, alignment, and syntax
+### Core Security Checks (Enhanced)
+- ✅ **SPF Check** - Deep analysis with:
+  - Syntax validation and mechanism breakdown
+  - DNS lookup counting (RFC 7208 compliance)
+  - Strength assessment (Strong/Moderate/Weak/Neutral)
+  - Human-readable mechanism descriptions
+- ✅ **DKIM Check** - Advanced validation with:
+  - Multi-selector discovery
+  - Key strength analysis (2048/1024/512-bit)
+  - Security profile assessment (High/Medium/Low)
+  - Algorithm and key type detection
+- ✅ **DMARC Check** - Comprehensive analysis with:
+  - Policy explanation (reject/quarantine/none)
+  - Alignment mode descriptions (strict/relaxed)
+  - Reporting URI validation
+  - Percentage and subdomain policy checks
 - 🕵️ **BIMI Check** - Checks for the presence and validity of BIMI logos and VMC certificates
 - 🌍 **Mail Server TLS Check** - Detects STARTTLS support for domain MX records
 - 📫 **MX Record Analysis** - Displays mail servers and compares against industry best practices
 - 🔒 **MTA-STS Check** - Validates MTA-STS policy configuration
 - 📊 **TLS-RPT Check** - Checks TLS-RPT reporting configuration
 - 🛡️ **DNSSEC Check** - Validates DNSSEC implementation
+
+### New Diagnostic Tools
+- 🔄 **Reverse DNS (PTR) Lookup** - Validates reverse DNS with:
+  - Forward-Confirmed reverse DNS (FCrDNS) validation
+  - IPv4 and IPv6 support
+  - Email deliverability insights
+- 🔍 **Port Scanner** - Scans common mail server ports:
+  - SMTP (25, 587, 465)
+  - IMAP (143, 993)
+  - POP3 (110, 995)
+  - Security recommendations based on open ports
+- 🚫 **Multi-RBL Blacklist Check** - Comprehensive blacklist checking:
+  - 8+ major RBL providers (Spamhaus, SpamCop, Barracuda, SORBS, etc.)
+  - Detailed status per RBL
+  - Severity classification
+  - Delisting recommendations
 
 ### Industry-Standard Scoring System
 Our scoring matrix aligns with industry standards like Easy DMARC and provides a comprehensive 100-point evaluation:
@@ -114,15 +142,20 @@ Once running, visit:
 
 ### Domain Security Checks
 - `GET /api/v1/security/scan/{domain}` - Comprehensive domain security scan with scoring
-- `GET /api/v1/security/spf/{domain}` - SPF record validation and analysis
-- `GET /api/v1/security/dkim/{domain}` - DKIM record validation and key analysis (checks 8 common selectors)
-- `GET /api/v1/security/dmarc/{domain}` - DMARC record validation and policy analysis
+- `GET /api/v1/security/spf/{domain}` - SPF record validation and analysis with strength assessment
+- `GET /api/v1/security/dkim/{domain}` - DKIM record validation with security profiling (checks 8 common selectors)
+- `GET /api/v1/security/dmarc/{domain}` - DMARC record validation with policy explanations
 - `GET /api/v1/security/bimi/{domain}` - BIMI record validation and logo verification
 - `GET /api/v1/security/tls/{domain}` - TLS/STARTTLS validation for mail servers
 - `GET /api/v1/security/mx/{domain}` - MX record analysis and mail server configuration
 - `GET /api/v1/security/mtasts/{domain}` - MTA-STS policy validation
 - `GET /api/v1/security/tlsrpt/{domain}` - TLS-RPT reporting configuration check
 - `GET /api/v1/security/dnssec/{domain}` - DNSSEC implementation validation
+
+### New Diagnostic Tools
+- `GET /api/v1/security/reverse-dns/{ip_address}` - Reverse DNS (PTR) lookup with FCrDNS validation
+- `GET /api/v1/security/port-scan/{hostname}` - Scan common mail server ports (SMTP, IMAP, POP3)
+- `GET /api/v1/security/blacklist-check/{ip_address}` - Check IP against 8+ major RBL providers
 
 ### Record Generators
 - `POST /api/v1/generate/spf` - Generate SPF records for email providers

@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 60
     
     # DNS Configuration
-    dns_timeout: int = 20
+    dns_timeout: float = 5.0
     dns_retries: int = 3
     dns_nameservers: Optional[str] = None  # Comma-separated, e.g., "1.1.1.1,8.8.8.8"
     
@@ -46,10 +46,11 @@ class Settings(BaseSettings):
     imap_tls_cafile: Optional[str] = None
     imap_tls_capath: Optional[str] = None
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"  # Ignore extra environment variables (e.g., old OPENAI_API_KEY)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra environment variables (e.g., old OPENAI_API_KEY)
+    )
 
 
 # Global settings instance

@@ -6,10 +6,7 @@ from app.models.domain import (
 )
 from app.models.responses import SuccessResponse
 from app.models.security import GeneratedRecord
-from app.utils.crypto_utils import (
-    DKIMKeyGenerator, SPFGenerator, DMARCGenerator,
-    MTASTSGenerator, TLSRPTGenerator
-)
+
 
 router = APIRouter(prefix="/api/v1/generate", tags=["Record Generation"])
 
@@ -20,15 +17,21 @@ async def generate_spf_record(request: SPFGeneratorRequest):
     Generate SPF (Sender Policy Framework) record.
     
     Creates a properly formatted SPF record based on your email providers
-    and custom requirements.
+    and custom requirements with validation and export options.
     """
     try:
+        # Import here to avoid circular import
+        from app.utils.crypto_utils import SPFGenerator, SPFOptimizer
+        
         # Generate SPF record
         spf_record = SPFGenerator.generate_spf_record(
             providers=request.email_providers,
             include_all=request.include_all,
             custom_mechanisms=request.custom_mechanisms
         )
+        
+        # Analyze the generated SPF record
+        analysis = SPFOptimizer.analyze_spf_record(spf_record)
         
         # Create instructions
         instructions = [
@@ -47,13 +50,77 @@ async def generate_spf_record(request: SPFGeneratorRequest):
                 if provider.lower() in SPFGenerator.PROVIDER_INCLUDES:
                     instructions.append(f"- {provider}: {SPFGenerator.PROVIDER_INCLUDES[provider.lower()]}")
         
-        # Add warnings
-        warnings = []
+        # Add warnings from analysis
+        warnings = analysis.get('warnings', [])
         if len(request.email_providers) > 10:
             warnings.append("Many email providers may cause DNS lookup issues")
         
         if request.include_all and len(SPFGenerator.PROVIDER_INCLUDES) > 10:
             warnings.append("Including all providers may exceed DNS lookup limits")
+        
+        # Add analysis errors as warnings
+        warnings.extend(analysis.get('errors', []))
+        
+        # Validation metadata
+        validation = {
+            'syntax_valid': analysis.get('valid', False),
+            'dns_lookup_count': f"{analysis.get('lookup_count', 0)}/10",
+            'record_length': f"{analysis.get('record_length', 0)}/{analysis.get('max_length', 255)}",
+            'estimated_propagation_time': '1-4 hours',
+            'common_issues': analysis.get('recommendations', [])
+        }
+        
+        # Export formats
+        export_formats = {
+            'bind': f'{request.domain}. IN TXT "{spf_record}"',
+            'json': f'{{"name": "{request.domain}", "type": "TXT", "value": "{spf_record}", "ttl": 3600}}',
+            'cloudflare': f'{{"type": "TXT", "name": "{request.domain}", "content": "{spf_record}", "ttl": 3600}}'
+        }
+        
+        # Related records suggestions
+        related_records = [
+            {
+                'type': 'dkim',
+                'suggestion': 'Generate DKIM record for email authentication',
+                'priority': 'high'
+            },
+            {
+                'type': 'dmarc',
+                'suggestion': 'Add DMARC policy for email security',
+                'priority': 'high'
+            }
+        ]
+        
+        # Popular DNS provider guides
+        provider_guides = [
+            {
+                'provider': 'cloudflare',
+                'quick_steps': [
+                    'Log in to Cloudflare dashboard',
+                    'Select your domain',
+                    'Go to DNS settings',
+                    'Add TXT record with name @ and value from above'
+                ]
+            },
+            {
+                'provider': 'route53',
+                'quick_steps': [
+                    'Open AWS Route 53 console',
+                    'Select hosted zone',
+                    'Create Record Set',
+                    'Type: TXT, Name: your domain, Value: SPF record'
+                ]
+            },
+            {
+                'provider': 'godaddy',
+                'quick_steps': [
+                    'Log in to GoDaddy',
+                    'My Products > DNS',
+                    'Add > TXT record',
+                    'Host: @, TXT Value: SPF record'
+                ]
+            }
+        ]
         
         return SuccessResponse(
             success=True,
@@ -64,7 +131,12 @@ async def generate_spf_record(request: SPFGeneratorRequest):
                 value=spf_record,
                 ttl=3600,
                 instructions=instructions,
-                warnings=warnings
+                warnings=warnings,
+                validation=validation,
+                export_formats=export_formats,
+                related_records=related_records,
+                provider_guides=provider_guides,
+                estimated_propagation_time="1-4 hours"
             )
         )
         
@@ -80,6 +152,8 @@ async def generate_dkim_record(request: DKIMGeneratorRequest):
     Creates a new RSA key pair and generates the corresponding DKIM DNS record.
     """
     try:
+        from app.utils.crypto_utils import DKIMKeyGenerator
+        
         # Generate key pair
         private_key, public_key = DKIMKeyGenerator.generate_rsa_key_pair(request.key_size)
         
@@ -137,6 +211,8 @@ async def generate_dmarc_record(request: DMARCGeneratorRequest):
     Creates a properly formatted DMARC record with your specified policy and reporting settings.
     """
     try:
+        from app.utils.crypto_utils import DMARCGenerator
+        
         # Generate DMARC record
         dmarc_record = DMARCGenerator.generate_dmarc_record(
             policy=request.policy,
@@ -203,6 +279,8 @@ async def generate_mtasts_record(request: MTASTSGeneratorRequest):
     Creates both the DNS TXT record and the policy file content for MTA-STS implementation.
     """
     try:
+        from app.utils.crypto_utils import MTASTSGenerator
+        
         # Generate MTA-STS DNS record
         mtasts_record = MTASTSGenerator.generate_mtasts_record(request.domain)
         
@@ -288,6 +366,8 @@ async def generate_tlsrpt_record(request: TLSRPTGeneratorRequest):
     Creates a properly formatted TLS-RPT record for receiving TLS failure reports.
     """
     try:
+        from app.utils.crypto_utils import TLSRPTGenerator
+        
         # Generate TLS-RPT record
         tlsrpt_record = TLSRPTGenerator.generate_tlsrpt_record(
             domain=request.domain,
@@ -346,9 +426,11 @@ async def get_spf_providers():
     """
     Get list of available email providers for SPF record generation.
     
-    Returns a dictionary of provider names and their corresponding SPF include strings.
+    Returns a dictionary of provider names with metadata, categories, and popularity indicators.
     """
     try:
+        from app.utils.crypto_utils import SPFGenerator
+        
         providers = SPFGenerator.get_available_providers()
         
         return SuccessResponse(
@@ -369,6 +451,8 @@ async def get_dmarc_policies():
     Returns detailed information about each DMARC policy type with recommendations.
     """
     try:
+        from app.utils.crypto_utils import DMARCGenerator
+        
         policies = DMARCGenerator.get_policy_recommendations()
         
         return SuccessResponse(
